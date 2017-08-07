@@ -1,9 +1,18 @@
+//! A `Block` is a linear sequences of `Instruction`.
+//!
+//! A `Block` must belong to a `ControlFlowGraph`. A `Block` contains many `Instruction`.
+//!
+//! When building a series of `Operation`/`Instruction`, we normally do so by calling the relevant
+//! method directly on the block where we wish to add the `Instruction`.
+//!
+//! To create a `Block`, call `ControlFlowGraph::new_block`.
+
 use std::fmt;
 use il::*;
 
 
-/// A basic block.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// A basic block in Falcon IL.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Block {
     /// The index of the block.
     index: u64,
@@ -17,7 +26,7 @@ pub struct Block {
 
 
 impl Block {
-    pub fn new(index: u64) -> Block {
+    pub(crate) fn new(index: u64) -> Block {
         Block {
             index: index,
             next_instruction_index: 0,
@@ -39,7 +48,9 @@ impl Block {
     }
 
 
-    /// Appends the contents of another block to this block.
+    /// Appends the contents of another `Block` to this `Block`.
+    ///
+    /// Instruction indices are updated accordingly.
     pub fn append(&mut self, other: &Block) {
         for instruction in other.instructions().iter() {
             let instruction = instruction.clone_new_index(self.new_instruction_index());
@@ -48,50 +59,49 @@ impl Block {
     }
 
 
-    /// Returns the index of this block
+    /// Returns the index of this `Block`
     pub fn index(&self) -> u64 {
         self.index
     }
 
 
-    /// Returns this block's instructions
+    /// Returns instructions for this `Block`
     pub fn instructions(&self) -> &Vec<Instruction> {
         &self.instructions
     }
 
 
+    /// Returns a mutable reference to the instructions for this `Block`.
     pub fn instructions_mut(&mut self) -> &mut Vec<Instruction> {
         &mut self.instructions
     }
 
 
-    /// Returns a copy of an instruction by index
-    pub fn instruction(&self, index: u64) -> Result<&Instruction> {
+    /// Returns an `Instruction` by index, or `None` if the instruction does not
+    /// exist.
+    pub fn instruction(&self, index: u64) -> Option<&Instruction> {
         for instruction in &self.instructions {
             if instruction.index() == index {
-                return Ok(&instruction);
+                return Some(instruction);
             }
         }
-        bail!("No instruction with index of {}", index);
+        None
     }
 
 
-    pub fn instruction_mut<'a>(&'a mut self, index: u64) -> Result<&'a mut Instruction> {
-        let mut location = None;
+    /// Returns a mutable reference to an `Instruction` by index, or `None` if
+    /// the `Instruction` does not exist.
+    pub fn instruction_mut<>(&mut self, index: u64) -> Option<&mut Instruction> {
         for i in 0..self.instructions.len() {
             if self.instructions[i].index() == index {
-                location = Some(i);
-                break;
+                return Some(&mut self.instructions[i]);
             }
         }
-        match location {
-            Some(i) => Ok(self.instructions.get_mut(i).unwrap()),
-            None => bail!("No instruction with index of {}", index)
-        }
+        None
     }
 
 
-    /// Deletes an operation by its index
+    /// Deletes an `Instruction` by its index.
     pub fn remove_instruction(&mut self, index: u64) -> Result<()> {
         let mut vec_index = None;
         for i in 0..self.instructions.len() {
@@ -111,36 +121,36 @@ impl Block {
 
 
     /// Clone this block and set a new index.
-    pub fn clone_new_index(&self, index: u64) -> Block {
+    pub(crate) fn clone_new_index(&self, index: u64) -> Block {
         let mut clone = self.clone();
         clone.index = index;
         clone
     }
 
 
-    /// Generates a temporary variable unique to this block.
-    pub fn temp(&mut self, bits: usize) -> Variable {
+    /// Generates a temporary scalar unique to this block.
+    pub fn temp(&mut self, bits: usize) -> Scalar {
         let next_index = self.next_temp_index;
         self.next_temp_index = next_index + 1;
-        Variable::new(format!("temp_{}.{}", self.index, next_index), bits)
+        Scalar::new(format!("temp_{}.{}", self.index, next_index), bits)
     }
 
     /// Adds an assign operation to the end of this block.
-    pub fn assign(&mut self, dst: Variable, src: Expression) {
+    pub fn assign(&mut self, dst: Scalar, src: Expression) {
         let index = self.new_instruction_index();
         self.push(Instruction::assign(index, dst, src));
     }
 
     /// Adds a store operation to the end of this block.
-    pub fn store(&mut self, address: Expression, src: Expression) {
+    pub fn store(&mut self, dst: Array, address: Expression, src: Expression) {
         let index = self.new_instruction_index();
-        self.push(Instruction::store(index, address, src))
+        self.push(Instruction::store(index, dst, address, src))
     }
 
     /// Adds a load operation to the end of this block.
-    pub fn load(&mut self, dst: Variable, address: Expression) {
+    pub fn load(&mut self, dst: Scalar, address: Expression, src: Array) {
         let index = self.new_instruction_index();
-        self.push(Instruction::load(index, dst, address));
+        self.push(Instruction::load(index, dst, address, src));
     }
 
     /// Adds a conditional branch operation to the end of this block.
@@ -150,13 +160,19 @@ impl Block {
     }
 
     /// Adds a phi operation to the end of this block.
-    pub fn phi(&mut self, dst: Variable, src: Vec<Variable>) {
+    pub fn phi(&mut self, dst: MultiVar, src: Vec<MultiVar>) {
         let index = self.new_instruction_index();
         self.push(Instruction::phi(index, dst, src));
     }
 
+    /// Adds a raise operation to the end of this block.
+    pub fn raise(&mut self, expr: Expression) {
+        let index = self.new_instruction_index();
+        self.push(Instruction::raise(index, expr));
+    }
+
     /// Prepends an operation to the beginning of this block
-    pub fn prepend_phi(&mut self, dst: Variable, src: Vec<Variable>) {
+    pub fn prepend_phi(&mut self, dst: MultiVar, src: Vec<MultiVar>) {
         let index = self.new_instruction_index();
         let phi = Instruction::phi(index, dst, src);
         self.instructions.insert(0, phi);

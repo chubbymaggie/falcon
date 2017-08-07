@@ -79,7 +79,6 @@ impl LatticeValue {
                 let mut swapped: BTreeSet<il::Constant> = BTreeSet::new();
                 // We're creating a LatticeAssignments for eval. Admittedly not
                 // the best solution
-                let la = LatticeAssignments::new(self.bits().unwrap());
                 for value in values.iter() {
                     let expr = executor::swap_bytes(&value.clone().into())?;
                     let const_ = executor::constants_expression(&expr)?; 
@@ -559,87 +558,6 @@ impl LatticeMemory {
         self
     }
 
-    /// Helper function to store a LatticeMemoryValue at the given address.
-    ///
-    /// Properly adjusts other adjacent values as necessary.
-    fn store_(&mut self, address: u64, mv: LatticeMemoryValue) {
-        // First we search for an overlappying LatticeMemoryValue before.
-        let overlapping = {
-            let mut overlapping: Vec<(u64, LatticeMemoryValue)> = Vec::new();
-
-            // Search up to 32 bytes back
-            let previous = self.memory.range((address - 32)..address);
-
-            if let Some(previous) = previous.last() {
-                let addr = previous.0;
-                let lmv = previous.1;
-                if addr + lmv.bytes() as u64 - 1 >= address {
-                    let trun = lmv.trun((address - addr) as usize * 8);
-                    overlapping.push((addr.clone(), trun));
-                }
-            }
-
-            overlapping
-        };
-
-        // If we have an overlapping LatticeMemoryValue, we replace it with
-        // the truncated value
-        for overlap in overlapping {
-            if overlap.1.bits() == 0 {
-                panic!("storing overlapping value with bits=0");
-            }
-            self.memory.insert(overlap.0, overlap.1);
-        }
-
-        // No we look to see if this overlaps any other LatticeMemory forward
-        let (drop, forward_overlapping) = {
-            let mut forward_overlapping: Vec<(u64, u64, LatticeMemoryValue)> = Vec::new();
-            let mut drop: Vec<u64> = Vec::new();
-
-            let forward = self.memory
-                          .range(address..(address + mv.bytes() as u64))
-                          .collect::<Vec<(&u64, &LatticeMemoryValue)>>();
-
-            for f in forward.iter() {
-                let addr = f.0;
-                let lmv = f.1;
-                // If we will completely overwrite this value, drop it
-                if addr + lmv.bytes() as u64 <= address + mv.bytes() as u64 {
-                    drop.push(addr.clone());
-                }
-                // Otherwise, extract the relevant portions and rebase it
-                else {
-                    let offset = ((address + mv.bytes() as u64) - addr) * 8;
-                    let bits = lmv.bits() as u64 - offset;
-                    let oldaddr = addr;
-                    let newaddr = address + mv.bytes() as u64;
-                    let extracted = lmv.extract(offset as usize, bits as usize);
-                    forward_overlapping.push((oldaddr.clone(), newaddr, extracted));
-                }
-            }
-
-            (drop, forward_overlapping)
-        };
-
-        for d in drop {
-            self.memory.remove(&d);
-        }
-
-        for overlap in forward_overlapping {
-            self.memory.remove(&overlap.0);
-            if overlap.2.bits() == 0 {
-                panic!("forward_overlapping bits=0");
-            }
-            self.memory.insert(overlap.1, overlap.2);
-        }
-
-        // Insert our value
-        if mv.bits() == 0 {
-            panic!("insert mv with bits=0");
-        }
-        self.memory.insert(address, mv);
-    }
-
 
     /// Store a value in big-endian into the `LatticeMemory`.
     ///
@@ -668,12 +586,6 @@ impl LatticeMemory {
                         addr.value() as u64,
                         LatticeMemoryValue::new_with_value(bits, value.clone())
                     );
-                    /*
-                    self.store_(
-                        addr.value() as u64,
-                        LatticeMemoryValue::new_with_value(bits, value.clone())
-                    );
-                    */
                 }
                 *self = self.clone().join(&lmv, max);
             }
@@ -714,18 +626,12 @@ impl LatticeMemory {
                 // to return
                 if addr + lmv.bytes() as u64 >= address + (bits / 8) as u64 {
                     let offset = (address - addr) as usize * 8;
-                    let trun_bits = if lmv.bits() - offset > bits {
-                            bits
-                        }
-                        else {
-                            lmv.bits()
-                    };
                     return Some(lmv.extract(offset, bits).value.clone());
                 }
             }
 
             // Nope, return None
-            return None;
+            None
         }
         // We read a value, but it didn't contain enough bits for our load
         else if let Some(mut lmv_result) = lmv_result {
@@ -742,11 +648,11 @@ impl LatticeMemory {
                     }
                     // Is it just right?
                     else if lmv.bits() == bits - lmv_result.bits() {
-                        return Some(lmv_result.concat(&lmv).value.clone());
+                        return Some(lmv_result.concat(lmv).value.clone());
                     }
                     // If it's too small, concat it and keep looping
                     else {
-                        lmv_result = lmv_result.concat(&lmv);
+                        lmv_result = lmv_result.concat(lmv);
                     }
                 }
                 else {
@@ -772,10 +678,10 @@ impl LatticeMemory {
     ) -> Option<LatticeValue> {
         let mut lv_result: Option<LatticeValue> = None;
 
-        match address {
-            &Join |
-            &Meet => {}, // TODO is this the right thing to do here?
-            &Values(ref addresses) => {
+        match *address {
+            Join |
+            Meet => {}, // TODO is this the right thing to do here?
+            Values(ref addresses) => {
                 for addr in addresses {
                     let address_u64 = addr.value();
                     let lv = self.load_(address_u64, bits);
@@ -798,10 +704,10 @@ impl LatticeMemory {
 }
 
 
-/// A mapping of variables and memory addresses to their lattice values
+/// A mapping of scalars and memory addresses to their lattice values
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct LatticeAssignments {
-    variables: BTreeMap<il::Variable, LatticeValue>,
+    scalars: BTreeMap<il::Scalar, LatticeValue>,
     memory: LatticeMemory,
     /// The max number of elements for each LatticeValue before converting it
     /// to Join
@@ -816,16 +722,16 @@ impl LatticeAssignments {
     /// hold before being transformed into `LatticeValue::Join`
     pub fn new(max: usize) -> LatticeAssignments {
         LatticeAssignments {
-            variables: BTreeMap::new(),
+            scalars: BTreeMap::new(),
             memory: LatticeMemory::new(),
             max: max
         }
     }
 
-    /// Get the `LatticeValue` for a variable
-    pub fn value(&self) -> &BTreeMap<il::Variable, LatticeValue> {
-        &self.variables
-    }
+    /// Get the `LatticeValue` for a scalar
+    // pub fn value(&self) -> &BTreeMap<il::Scalar, LatticeValue> {
+    //     &self.variables
+    // }
 
     /// Get max number of values a `LatticeValue` can have before Join
     pub fn max(&self) -> usize {
@@ -834,12 +740,12 @@ impl LatticeAssignments {
 
     pub fn join(mut self, other: &LatticeAssignments) -> LatticeAssignments {
         // for every assignment in the other LatticeAssignment
-        for assignment in &other.variables {
-            let variable = assignment.0;
+        for assignment in &other.scalars {
+            let scalar = assignment.0;
             let mut lattice_value = assignment.1.clone();
 
-            // If the variable exists here
-            if let Some(lv) = self.variables.get(variable) {
+            // If the scalars exists here
+            if let Some(lv) = self.scalars.get(scalar) {
                 // Join the two values
                 let lv = lv.clone().join(&lattice_value);
                 // If the join is a vlue (not Meet/Join)
@@ -857,7 +763,7 @@ impl LatticeAssignments {
                 }
             }
 
-            self.variables.insert(variable.clone(), lattice_value);
+            self.scalars.insert(scalar.clone(), lattice_value);
         }
 
         self.memory = self.memory.join(&other.memory, self.max);
@@ -865,14 +771,14 @@ impl LatticeAssignments {
         self
     }
 
-    /// Set the `LatticeValue` for an `il::Variable`
-    pub fn set(&mut self, variable: il::Variable, value: LatticeValue) {
-        self.variables.insert(variable, value);
+    /// Set the `LatticeValue` for an `il::Scalar`
+    pub fn set(&mut self, scalar: il::Scalar, value: LatticeValue) {
+        self.scalars.insert(scalar, value);
     }
 
-    /// Get the `LatticeValue` for a `Variable`.
-    pub fn get(&self, variable: &il::Variable) -> Option<&LatticeValue> {
-        self.variables.get(variable)
+    /// Get the `LatticeValue` for an `il::Scalar`.
+    pub fn get(&self, scalar: &il::Scalar) -> Option<&LatticeValue> {
+        self.scalars.get(scalar)
     }
 
     pub fn store(&mut self, address: &LatticeValue, value: LatticeValue, bits: usize) {
@@ -888,7 +794,7 @@ impl LatticeAssignments {
     }
 
     /// Evaluates an `il::Expression`, using the values in this
-    /// `LatticeAssignments` for variables.
+    /// `LatticeAssignments` for scalars.
     pub fn eval(&self, expr: &Expression) -> LatticeValue {
         let lattice_value = self.eval_(expr);
         if let Values(ref values) = lattice_value {
@@ -902,8 +808,8 @@ impl LatticeAssignments {
     fn eval_(&self, expr: &Expression) -> LatticeValue {
         match *expr {
 
-            Expression::Variable(ref variable) => {
-                match self.variables.get(variable) {
+            Expression::Scalar(ref scalar) => {
+                match self.scalars.get(scalar) {
                     Some(lattice_value) => lattice_value.clone(),
                     None => LatticeValue::Meet
                 }
@@ -930,12 +836,12 @@ impl LatticeAssignments {
                 )
             },
 
-            Expression::Mulu(ref lhs, ref rhs) => {
+            Expression::Mul(ref lhs, ref rhs) => {
                 lattice_value_binop(
                     &self.eval_(lhs),
                     &self.eval_(rhs),
                     |lhs: il::Constant, rhs: il::Constant| 
-                        Expression::mulu(lhs.into(), rhs.into()).unwrap()
+                        Expression::mul(lhs.into(), rhs.into()).unwrap()
                 )
             },
 
@@ -954,15 +860,6 @@ impl LatticeAssignments {
                     &self.eval_(rhs),
                     |lhs: il::Constant, rhs: il::Constant| 
                         Expression::modu(lhs.into(), rhs.into()).unwrap()
-                )
-            },
-
-            Expression::Muls(ref lhs, ref rhs) => {
-                lattice_value_binop(
-                    &self.eval_(lhs),
-                    &self.eval_(rhs),
-                    |lhs: il::Constant, rhs: il::Constant| 
-                        Expression::muls(lhs.into(), rhs.into()).unwrap()
                 )
             },
 

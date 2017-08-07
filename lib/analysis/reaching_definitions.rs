@@ -28,22 +28,10 @@ impl Reaches {
         }
     }
 
-    fn in_insert(&mut self, analysis_location: AnalysisLocation) {
-        self.in_.insert(analysis_location);
-    }
-
-    fn in_remove(&mut self, analysis_location: &AnalysisLocation) {
-        self.in_.remove(analysis_location);
-    }
-
     /// The set of `AnalysisLocation`s whose variables written are valid upon
     /// entry to this `Reach`.
     pub fn in_(&self) -> &BTreeSet<AnalysisLocation> {
         &self.in_
-    }
-
-    fn set_in(&mut self, in_: BTreeSet<AnalysisLocation>) {
-        self.in_ = in_;
     }
 
     fn set_in_to_out(&mut self) {
@@ -62,10 +50,6 @@ impl Reaches {
     /// exit from this `Reach`.
     pub fn out(&self) -> &BTreeSet<AnalysisLocation> {
         &self.out
-    }
-
-    fn set_out(&mut self, out: BTreeSet<AnalysisLocation>) {
-        self.out = out;
     }
 
     // Provides a string representation of this struct.
@@ -175,9 +159,9 @@ impl<'f> FixedPointAnalysis<Reaches> for ReachingDefinitions<'f> {
             Edge(_) |
             EmptyBlock(_) => Ok(reaches_out),
             // Instructions..
-            Instruction(ref ii) => { 
+            Instruction(ref il) => { 
                 // If this instruction writes to a variable
-                if let Some(this_dst) = ii.find(self.control_flow_graph)?
+                if let Some(this_dst) = il.find(self.control_flow_graph)?
                                           .variable_written() {
 
                     let mut to_kill = Vec::new();
@@ -185,9 +169,9 @@ impl<'f> FixedPointAnalysis<Reaches> for ReachingDefinitions<'f> {
                     // candidate to be killed.
                     for kill_location in reaches_out.in_().iter() {
                         // Candidates should always be instructions.
-                        if let AnalysisLocation::Instruction(ref ii) = *kill_location {
+                        if let AnalysisLocation::Instruction(ref il) = *kill_location {
                             // If this candidate writes to an instruction
-                            if let Some(dst) = ii.find(self.control_flow_graph)?
+                            if let Some(dst) = il.find(self.control_flow_graph)?
                                                  .variable_written() {
                                 // Do they write to the same variable?
                                 if this_dst.name() == dst.name() {
@@ -205,7 +189,7 @@ impl<'f> FixedPointAnalysis<Reaches> for ReachingDefinitions<'f> {
                     }
 
                     // Add this location to the out set.
-                    reaches_out.out_insert(ii.clone().into());
+                    reaches_out.out_insert(il.clone().into());
                 }
 
                 Ok(reaches_out)

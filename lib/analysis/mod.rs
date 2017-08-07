@@ -1,12 +1,13 @@
-//! Analyses and Optimizations over Vulture IL
+//! Analyses and Optimizations over Falcon IL
 
 pub mod analysis_location;
+// mod constraints;
 mod dead_code_elimination;
 mod def_use;
-mod fixed_point;
+pub mod fixed_point;
 pub mod lattice;
 mod reaching_definitions;
-mod simplification;
+// mod simplification;
 pub mod ssa;
 mod value_set;
 
@@ -47,14 +48,21 @@ impl<'a> Analysis<'a> {
         })
     }
 
+    // /// Returns the result of constraint analysis.
+    // pub fn constraints(&self) ->
+    // Result<BTreeMap<AnalysisLocation, constraints::Constraints>> {
+    //     let ca = constraints::ConstraintAnalysis::new(self.control_flow_graph);
+    //     ca.compute()
+    // }
+
     /// Returns the ControlFlowGraph all analysis was performed over.
     pub fn control_flow_graph(&self) -> &il::ControlFlowGraph {
-        &self.control_flow_graph
+        self.control_flow_graph
     }
 
-    /// Reaching definitions for this `Analysis`.
-    pub fn reaching_definitions(&self) -> &BTreeMap<AnalysisLocation, Reaches> {
-        &self.reaching_definitions
+    // /// Performs dead code elimination and returns the result in a new graph.
+    pub fn dead_code_elimination(&self) -> Result<il::ControlFlowGraph> {
+        dead_code_elimination::dead_code_elimination(self)
     }
 
     /// Def Use chains for this `Analysis`.
@@ -67,34 +75,34 @@ impl<'a> Analysis<'a> {
         &self.use_def
     }
 
-    /// Performs multiple, non-semantic altering optimizations
-    pub fn optimize(&self) -> Result<il::ControlFlowGraph> {
-        let mut rolling_graph = self.control_flow_graph.clone();
-        loop {
-            let new_graph = {
-                let analysis = Analysis::new(&rolling_graph)?;
-                // let cfg = analysis.simplification()?;
-                // let analysis = Analysis::new(&cfg)?;
-                analysis.dead_code_elimination()?
-            };
-            if new_graph == rolling_graph {
-                return Ok(new_graph);
-            }
-            else {
-                rolling_graph = new_graph;
-            }
-        }
+    // /// Performs multiple, non-semantic altering optimizations
+    // pub fn optimize(&self) -> Result<il::ControlFlowGraph> {
+    //     let mut rolling_graph = self.control_flow_graph.clone();
+    //     loop {
+    //         let new_graph = {
+    //             let analysis = Analysis::new(&rolling_graph)?;
+    //             // let cfg = analysis.simplification()?;
+    //             // let analysis = Analysis::new(&cfg)?;
+    //             analysis.dead_code_elimination()?
+    //         };
+    //         if new_graph == rolling_graph {
+    //             return Ok(new_graph);
+    //         }
+    //         else {
+    //             rolling_graph = new_graph;
+    //         }
+    //     }
+    // }
+
+    /// Reaching definitions for this `Analysis`.
+    pub fn reaching_definitions(&self) -> &BTreeMap<AnalysisLocation, Reaches> {
+        &self.reaching_definitions
     }
 
-    /// Simplifies the IL
-    pub fn simplification(&self) -> Result<il::ControlFlowGraph> {
-        simplification::simplification(self)
-    }
-
-    /// Performs dead code elimination and returns the result in a new graph.
-    pub fn dead_code_elimination(&self) -> Result<il::ControlFlowGraph> {
-        dead_code_elimination::dead_code_elimination(self)
-    }
+    // /// Simplifies the IL
+    // pub fn simplification(&self) -> Result<il::ControlFlowGraph> {
+    //     simplification::simplification(self)
+    // }
 
     /// Returns the result of value set analysis
     ///

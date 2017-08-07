@@ -6,10 +6,10 @@ pub mod memory;
 
 use error::*;
 use translator;
-use translator::Arch;
 use il;
 use std::fmt;
 
+/// An enum of architectures supported by the loader.
 #[derive(Clone, Debug)]
 pub enum Architecture {
     X86
@@ -17,6 +17,7 @@ pub enum Architecture {
 
 
 impl Architecture {
+    /// Get the endiannes of an `Architecture`
     pub fn endian(&self) -> Endian {
         match *self {
             Architecture::X86 => Endian::Little
@@ -25,6 +26,7 @@ impl Architecture {
 }
 
 
+/// An enum representing endiannes for a loader.
 #[derive(Clone, Debug)]
 pub enum Endian {
     Big,
@@ -42,6 +44,7 @@ impl Into<translator::Endian> for Endian {
 }
 
 
+/// A declared entry point for a function.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FunctionEntry {
     address: u64,
@@ -50,6 +53,9 @@ pub struct FunctionEntry {
 
 
 impl FunctionEntry {
+    /// Create a new `FunctionEntry`.
+    ///
+    /// If no name is provided: `sup_{:X}` will be used to name the function.
     pub fn new(address: u64, name: Option<String>) -> FunctionEntry {
         match name {
             Some(name) => FunctionEntry {
@@ -65,10 +71,12 @@ impl FunctionEntry {
         }
     }
 
+    /// Get the address for this `FunctionEntry`.
     pub fn address(&self) -> u64 {
         self.address
     }
 
+    /// Get the name for this `FunctionEntry`.
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -90,18 +98,33 @@ pub trait Loader: ::std::fmt::Debug + Clone {
     /// Get addresses for known function entries
     fn function_entries(&self) -> Result<Vec<FunctionEntry>>;
 
+    /// The address program execution should begin at
+    fn program_entry(&self) -> u64;
+
     /// Get the architecture of the binary
     fn architecture(&self) -> Result<Architecture>;
 
-    /// Turn this into an il::Program
-    fn to_program(&self) -> Result<il::Program> {
-        // Get out architecture-specific translator
-        let translator = match self.architecture() {
+    /// Get the translator for this binary's architecture
+    fn translator(&self) -> Result<Box<translator::Arch>> {
+        match self.architecture() {
             Ok(arch) => match arch {
-                Architecture::X86 => translator::x86::X86::new()
+                Architecture::X86 => Ok(Box::new(translator::x86::X86::new()))
             },
             Err(_) => bail!("Unsupported Architecture")
-        };
+        }
+    }
+
+    /// Lift just one function from the executable
+    fn function(&self, address: u64) -> Result<il::Function> {
+        let translator = self.translator()?;
+        let memory = self.memory()?;
+        Ok(translator.translate_function(&memory, address)?)
+    }
+
+    /// Lift executable into an il::Program
+    fn to_program(&self) -> Result<il::Program> {
+        // Get out architecture-specific translator
+        let translator = self.translator()?;
 
         // Create a mapping of the file memory
         let memory = self.memory()?;
@@ -113,7 +136,7 @@ pub trait Loader: ::std::fmt::Debug + Clone {
             trace!("adding function at {:X}", address);
             let mut function = translator.translate_function(&memory, address)?;
             function.set_name(Some(function_entry.name().to_string()));
-            program.set_function(function);
+            program.add_function(function);
         }
 
         Ok(program)

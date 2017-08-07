@@ -1,21 +1,53 @@
-//! Translator from host architectures to Falcon IL
+//! Translates native architectures to Falcon IL.
 
 use error::*;
 use il::*;
-use loader::memory::Memory;
 use std::boxed::Box;
 use std::collections::{BTreeMap, VecDeque};
 
 pub mod x86;
 
-
+/// The endianness of the native architecture.
 pub enum Endian {
     Big,
     Little
 }
 
 
-/// The result of a block translation
+const DEFAULT_TRANSLATION_BLOCK_BYTES: usize = 64;
+
+/// This trait is used by the translator to continually find and lift bytes from an underlying
+/// memory model.
+///
+/// Anything that implements this trait can be used as a memory backing for lifting.
+pub trait TranslationMemory {
+    fn get_u8(&self, address: u64) -> Option<u8>;
+
+    fn get_bytes(&self, address: u64, length: usize) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for i in 0..length {
+            match self.get_u8(address + i as u64) {
+                Some(u) => bytes.push(u),
+                None => break
+            };
+        }
+        bytes
+    }
+}
+
+
+/// The result of a native block translation.
+///
+/// _"Block"_ in `BlockTranslationResult` refers to a block in the native architecture, not a
+/// `Block` from Falcon IL.
+///
+/// # Native blocks translated to `ControlFlowGraph`
+///
+/// While a block on the native architecture may be a linear sequence of instructions,
+/// when lifted this block may actually contain loops, conditionally executed instructions,
+/// and a host of other oddness. Translators therefor return a `ControlFlowGraph` for the
+/// translation of a block. The *entry* and *exit* for this `ControlFlowGraph` should be
+/// set.
 pub struct BlockTranslationResult {
     /// A control flow graph which holds the semantics of this block
     control_flow_graph: ControlFlowGraph,
@@ -29,6 +61,13 @@ pub struct BlockTranslationResult {
 
 
 impl BlockTranslationResult {
+    /// Create a new `BlockTranslationResult`.
+    ///
+    /// # Parameters
+    /// * `control_flow_graph` - A `ControlFlowGraph` representing the semantics of this block.
+    /// * `address` - The address where this block was lifted.
+    /// * `length` - The length of the block in bytes.
+    /// * `successors` - Tuples of addresses and optional conditions for successors to this block.
     pub fn new(
         control_flow_graph: ControlFlowGraph,
         address: u64,
@@ -43,18 +82,22 @@ impl BlockTranslationResult {
         }
     }
 
+    /// Get the `ControlFlowGraph` for this `BlockTranslationResult`
     pub fn control_flow_graph(&self) -> &ControlFlowGraph {
         &self.control_flow_graph
     }
 
+    /// Get the address wherefrom this block was translated.
     pub fn address(&self) -> u64 {
         self.address
     }
 
+    /// Get the length of this block in bytes.
     pub fn length(&self) -> usize {
         self.length
     }
 
+    /// Get the successors for this block.
     pub fn successors(&self) -> &Vec<(u64, Option<Expression>)> {
         &self.successors
     }
@@ -65,14 +108,13 @@ pub trait Arch {
     /// Translates a basic block
     fn translate_block(&self, bytes: &[u8], address: u64) -> Result<BlockTranslationResult>;
 
-
+    /// Get the endianness of this `Arch`.
     fn endian(&self) -> Endian;
-
 
     /// Translates a function
     fn translate_function(
         &self,
-        memory: &Memory,
+        memory: &TranslationMemory,
         function_address: u64)
     -> Result<Function> {
         let mut translation_queue = VecDeque::new();
@@ -81,23 +123,17 @@ pub trait Arch {
         translation_queue.push_front(function_address);
 
         // translate all blocks in the function
-        while translation_queue.len() > 0 {
+        while !translation_queue.is_empty() {
             let block_address = translation_queue.pop_front().unwrap();
 
             if translation_results.contains_key(&block_address) {
                 continue;
             }
 
-            let block_bytes = match memory.get(block_address) {
-                Some(bytes) => bytes,
-                None => bail!(
-                    "Failed to get bytes for block at {}",
-                    block_address
-                )
-            };
+            let block_bytes = memory.get_bytes(block_address, DEFAULT_TRANSLATION_BLOCK_BYTES);
 
             // translate this block
-            let block_translation_result = self.translate_block(block_bytes, block_address)?;
+            let block_translation_result = self.translate_block(&block_bytes, block_address)?;
 
             // enqueue all successors
             for successor in block_translation_result.successors().iter() {
@@ -118,9 +154,9 @@ pub trait Arch {
 
         // Insert the edges
         for result in translation_results {
-            let &(this_entry, this_exit) = indices.get(&result.0).unwrap();
+            let (_, this_exit) = indices[&result.0];
             for successor in result.1.successors().iter() {
-                let &(that_entry, that_exit) = indices.get(&successor.0).unwrap();
+                let (that_entry, _) = indices[&successor.0];
                 match successor.1 {
                     Some(ref condition) => control_flow_graph.conditional_edge(this_exit, that_entry, condition.clone())?,
                     None => control_flow_graph.unconditional_edge(this_exit, that_entry)?

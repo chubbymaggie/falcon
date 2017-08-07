@@ -46,14 +46,16 @@ impl FPA {
             let mut predlocs: Vec<AnalysisLocation> = Vec::new();
 
             for edge in control_flow_graph.graph()
-                                          .edges_in(block.index())? {
+                                          .edges_in(block.index())
+                                          .unwrap() {
                 let analysis_location = AnalysisLocation::edge(edge.head(), edge.tail());
                 
                 // we need an edge from this edge to the last instruction of the
                 // head block
-                if let Some(ins) = control_flow_graph.block(edge.head())?
-                                                     .instructions()
-                                                     .last() {
+                if let Some(ins) = control_flow_graph.block(edge.head())
+                                                .ok_or("Could not find block")?
+                                                .instructions()
+                                                .last() {
                     let mut predlocs = Vec::new();
                     predlocs.push(AnalysisLocation::instruction(edge.head(), ins.index()));
                     predecessor_locations.insert(analysis_location.clone(), predlocs);
@@ -124,7 +126,7 @@ impl FPA {
                 let al = entry.0;
                 let preds = entry.1
                                  .iter()
-                                 .map(|al| al.clone())
+                                 .cloned()
                                  .collect::<BTreeSet<AnalysisLocation>>();
                 back_edges.insert(al.clone(), preds);
                 back_edge_queue.push_back(al);
@@ -140,24 +142,24 @@ impl FPA {
 
                 let mut to_add = Vec::with_capacity(back_edges.len());
                 {
-                    let ref this_predecessors = back_edges[&al];
-                    for predecessor in &predecessor_locations[&al] {
-                        for pp in &back_edges[&predecessor] {
+                    let this_predecessors = &back_edges[al];
+                    for predecessor in &predecessor_locations[al] {
+                        for pp in &back_edges[predecessor] {
                             iterations += 1;
-                            if !this_predecessors.contains(&pp) {
+                            if !this_predecessors.contains(pp) {
                                 to_add.push(pp.clone());
                             }
                         }
                     }
                 }
 
-                if to_add.len() > 0 {
-                    for successor in &successor_locations[&al] {
+                if !to_add.is_empty() {
+                    for successor in &successor_locations[al] {
                         back_edge_queue.push_back(successor);
                     }
                 }
 
-                let mut this_predecessors = back_edges.get_mut(&al).unwrap();
+                let mut this_predecessors = back_edges.get_mut(al).unwrap();
                 for predecessor in to_add {
                     this_predecessors.insert(predecessor);
                 }
@@ -182,7 +184,7 @@ impl FPA {
                 let set = back_edge.1;
                 let mut pruned_set = BTreeSet::new();
                 for pred in set {
-                    if back_edges[pred].contains(&al) {
+                    if back_edges[pred].contains(al) {
                         pruned_set.insert(pred.clone());
                     }
                 }
@@ -232,7 +234,7 @@ where Analysis: FixedPointAnalysis<State>, State: Clone + Debug + PartialEq + Eq
         let out_state = {
             let mut in_state = None;
             for analysis_location in predlocs {
-                if let Some(state) = states.get(&analysis_location) {
+                if let Some(state) = states.get(analysis_location) {
                     if let Some(in_state_) = in_state {
                         in_state = Some(analysis.join(in_state_, state)?);
                     }
@@ -320,7 +322,7 @@ where Analysis: FixedPointAnalysis<State>, State: Clone + Debug + PartialEq + Eq
         let out_state = {
             let mut in_state = None;
             for analysis_location in succlocs {
-                if let Some(state) = states.get(&analysis_location) {
+                if let Some(state) = states.get(analysis_location) {
                     if let Some(in_state_) = in_state {
                         in_state = Some(analysis.join(in_state_, state)?);
                     }
@@ -334,8 +336,12 @@ where Analysis: FixedPointAnalysis<State>, State: Clone + Debug + PartialEq + Eq
         };
 
         if let Some(in_state) = states.get(&analysis_location) {
-            continue;
+            if out_state == *in_state {
+                continue;
+            }
         }
+
+        info!("adding predecessors");
 
         states.insert(analysis_location.clone(), out_state);
 

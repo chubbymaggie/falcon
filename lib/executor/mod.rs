@@ -1,4 +1,4 @@
-//! Various ways of executing over Falcon IL
+//! Various methods of executing over Falcon IL
 
 use error::*;
 use il;
@@ -126,8 +126,8 @@ pub fn constants_expression(expr: &il::Expression) -> Result<il::Constant> {
     }
 
     match *expr {
-        il::Expression::Variable(_) => {
-            bail!("constants_expression called with Variable terminal")
+        il::Expression::Scalar(_) => {
+            bail!("constants_expression called with Scalar terminal")
         },
 
         il::Expression::Constant(ref constant) => Ok(constant.clone()),
@@ -142,7 +142,7 @@ pub fn constants_expression(expr: &il::Expression) -> Result<il::Constant> {
             Ok(il::Constant::new(r, lhs.bits()))
         },
 
-        il::Expression::Mulu(ref lhs, ref rhs) => {
+        il::Expression::Mul(ref lhs, ref rhs) => {
             let r = ece(lhs)?.value() * ece(rhs)?.value();
             Ok(il::Constant::new(r, lhs.bits()))
         },
@@ -163,11 +163,6 @@ pub fn constants_expression(expr: &il::Expression) -> Result<il::Constant> {
             }
             let r = ece(lhs)?.value() % rhs.value();
             Ok(il::Constant::new(r, lhs.bits()))
-        },
-
-        il::Expression::Muls(ref lhs, ref rhs) => {
-            let r = (ece(lhs)?.value() as i64) * (ece(rhs)?.value() as i64);
-            Ok(il::Constant::new(r as u64, lhs.bits()))
         },
 
         il::Expression::Divs(ref lhs, ref rhs) => {
@@ -249,7 +244,8 @@ pub fn constants_expression(expr: &il::Expression) -> Result<il::Constant> {
             }
         },
 
-        il::Expression::Zext(bits, ref rhs) => {
+        il::Expression::Zext(bits, ref rhs) |
+        il::Expression::Trun(bits, ref rhs) => {
             Ok(il::Constant::new(ece(rhs)?.value(), bits))
         },
 
@@ -262,10 +258,6 @@ pub fn constants_expression(expr: &il::Expression) -> Result<il::Constant> {
             else {
                 Ok(il::Constant::new(rhs.value(), bits))
             }
-        },
-
-        il::Expression::Trun(bits, ref rhs) => {
-            Ok(il::Constant::new(ece(rhs)?.value(), bits))
         }
     }
 }

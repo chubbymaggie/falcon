@@ -1,20 +1,41 @@
+//! An `Expression`.
+//!
+//! # Expression Rules
+//! ## Bitness
+//! We refer to the number of bits in the result of an `Expression` as its _bitness_.
+//!
+//! Expressions must always have the same bitness. For example, you cannot add an 8-bit and a
+//! 16-bit expression. You must extern or truncate one of these operands until the bitness
+//! matches. The bitness of all comparison expressions is always 1.
+//!
+//! # Expression Breakdown
+//! ## Terminals
+//! `scalar`, `constant`
+//!
+//! ## Binary Arithmetic
+//! `add`, `sub`, `divu`, `modu`, `divs`, `mods`, `and`, `or`, `xor`, `shl`, `shr`
+//!
+//! ## Comparison
+//! `cmpeq`, `cmpneq`, `cmplts`, `cmpltu`
+//!
+//! ## Extension/Truncation
+//! `zext`, `sext`, `trun`
+
 use std::fmt;
 
 use il::*;
 
 /// An IL Expression.
-/// Expressions form the building blocks of instructions, and always evaluate
-/// some value.
-#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum Expression {
-    Variable(Variable),
+    Scalar(Scalar),
     Constant(Constant),
+
     Add(Box<Expression>, Box<Expression>),
     Sub(Box<Expression>, Box<Expression>),
-    Mulu(Box<Expression>, Box<Expression>),
+    Mul(Box<Expression>, Box<Expression>),
     Divu(Box<Expression>, Box<Expression>),
     Modu(Box<Expression>, Box<Expression>),
-    Muls(Box<Expression>, Box<Expression>),
     Divs(Box<Expression>, Box<Expression>),
     Mods(Box<Expression>, Box<Expression>),
     And(Box<Expression>, Box<Expression>),
@@ -22,42 +43,43 @@ pub enum Expression {
     Xor(Box<Expression>, Box<Expression>),
     Shl(Box<Expression>, Box<Expression>),
     Shr(Box<Expression>, Box<Expression>),
+
     Cmpeq(Box<Expression>, Box<Expression>),
     Cmpneq(Box<Expression>, Box<Expression>),
     Cmplts(Box<Expression>, Box<Expression>),
     Cmpltu(Box<Expression>, Box<Expression>),
+
     Zext(usize, Box<Expression>),
     Sext(usize, Box<Expression>),
-    Trun(usize, Box<Expression>)
+    Trun(usize, Box<Expression>),
 }
 
 
 impl Expression {
-    /// Return the bit-sort of this expression.
+    /// Return the bitness of this expression.
     pub fn bits(&self) -> usize {
-        match self {
-            &Expression::Variable(ref variable) => variable.bits(),
-            &Expression::Constant(ref constant) => constant.bits(),
-            &Expression::Add(ref lhs, ref rhs) => lhs.bits(),
-            &Expression::Sub(ref lhs, ref rhs) => lhs.bits(),
-            &Expression::Mulu(ref lhs, ref rhs) => lhs.bits(),
-            &Expression::Divu(ref lhs, ref rhs) => lhs.bits(),
-            &Expression::Modu(ref lhs, ref rhs) => lhs.bits(),
-            &Expression::Muls(ref lhs, ref rhs) => lhs.bits(),
-            &Expression::Divs(ref lhs, ref rhs) => lhs.bits(),
-            &Expression::Mods(ref lhs, ref rhs) => lhs.bits(),
-            &Expression::And(ref lhs, ref rhs) => lhs.bits(),
-            &Expression::Or(ref lhs, ref rhs) => lhs.bits(),
-            &Expression::Xor(ref lhs, ref rhs) => lhs.bits(),
-            &Expression::Shl(ref lhs, ref rhs) => lhs.bits(),
-            &Expression::Shr(ref lhs, ref rhs) => lhs.bits(),
-            &Expression::Cmpeq(ref lhs, ref rhs) => lhs.bits(),
-            &Expression::Cmpneq(ref lhs, ref rhs) => lhs.bits(),
-            &Expression::Cmplts(ref lhs, ref rhs) => lhs.bits(),
-            &Expression::Cmpltu(ref lhs, ref rhs) => lhs.bits(),
-            &Expression::Zext(bits, ref rhs) => bits,
-            &Expression::Sext(bits, ref rhs) => bits,
-            &Expression::Trun(bits, ref rhs) => bits
+        match *self {
+            Expression::Scalar(ref scalar) => scalar.bits(),
+            Expression::Constant(ref constant) => constant.bits(),
+            Expression::Add(ref lhs, _) |
+            Expression::Sub(ref lhs, _) |
+            Expression::Mul(ref lhs, _) |
+            Expression::Divu(ref lhs, _) |
+            Expression::Modu(ref lhs, _) |
+            Expression::Divs(ref lhs, _) |
+            Expression::Mods(ref lhs, _) |
+            Expression::And(ref lhs, _) |
+            Expression::Or(ref lhs, _) |
+            Expression::Xor(ref lhs, _) |
+            Expression::Shl(ref lhs, _) |
+            Expression::Shr(ref lhs, _) => lhs.bits(),
+            Expression::Cmpeq(_, _) |
+            Expression::Cmpneq(_, _) |
+            Expression::Cmplts(_, _) |
+            Expression::Cmpltu(_, _) => 1,
+            Expression::Zext(bits, _) |
+            Expression::Sext(bits, _) |
+            Expression::Trun(bits, _) => bits
         }
     }
 
@@ -66,10 +88,8 @@ impl Expression {
     /// Also ensures this expression doesn't include flags (which have a sort
     /// of 0)
     fn ensure_sort(lhs: &Expression, rhs: &Expression, no_flags: bool) -> Result<()> {
-        if lhs.bits() != rhs.bits() {
-            Err(ErrorKind::Sort.into())
-        }
-        else if no_flags == true && lhs.bits() == 0 {
+        if    lhs.bits() != rhs.bits() 
+           || (no_flags && lhs.bits() == 0) {
             Err(ErrorKind::Sort.into())
         }
         else {
@@ -77,20 +97,19 @@ impl Expression {
         }
     }
 
-    /// Returns all variables used in the expression
-    pub fn collect_variables(&self) -> Vec<&Variable> {
-        let mut variables: Vec<&Variable> = Vec::new();
+    /// Returns all `Scalars` used in this `Expression`
+    pub fn collect_scalars(&self) -> Vec<&Scalar> {
+        let mut scalars: Vec<&Scalar> = Vec::new();
         match *self {
-            Expression::Variable(ref variable) => {
-                variables.push(&variable)
+            Expression::Scalar(ref scalar) => {
+                scalars.push(scalar)
             }
             Expression::Constant(_) => {}
             Expression::Add(ref lhs, ref rhs) |
             Expression::Sub(ref lhs, ref rhs) |
-            Expression::Mulu(ref lhs, ref rhs) |
+            Expression::Mul(ref lhs, ref rhs) |
             Expression::Divu(ref lhs, ref rhs) |
             Expression::Modu(ref lhs, ref rhs) |
-            Expression::Muls(ref lhs, ref rhs) |
             Expression::Divs(ref lhs, ref rhs) |
             Expression::Mods(ref lhs, ref rhs) |
             Expression::And(ref lhs, ref rhs) |
@@ -102,31 +121,31 @@ impl Expression {
             Expression::Cmpneq(ref lhs, ref rhs) |
             Expression::Cmplts(ref lhs, ref rhs) |
             Expression::Cmpltu(ref lhs, ref rhs) => {
-                variables.append(&mut lhs.collect_variables());
-                variables.append(&mut rhs.collect_variables());
+                scalars.append(&mut lhs.collect_scalars());
+                scalars.append(&mut rhs.collect_scalars());
             },
-            Expression::Zext(bits, ref rhs) |
-            Expression::Sext(bits, ref rhs) |
-            Expression::Trun(bits, ref rhs) => {
-                variables.append(&mut rhs.collect_variables());
+            Expression::Zext(_, ref rhs) |
+            Expression::Sext(_, ref rhs) |
+            Expression::Trun(_, ref rhs) => {
+                scalars.append(&mut rhs.collect_scalars());
             }
         }
-        variables
+        scalars
     }
 
-    pub fn collect_variables_mut(&mut self) -> Vec<&mut Variable> {
-        let mut variables: Vec<&mut Variable> = Vec::new();
+    /// Return mutable references to all `Scalars` in this `Expression`.
+    pub fn collect_scalars_mut(&mut self) -> Vec<&mut Scalar> {
+        let mut scalars: Vec<&mut Scalar> = Vec::new();
         match *self {
-            Expression::Variable(ref mut variable) => {
-                variables.push(variable)
-            },
-            Expression::Constant(_)  => {}
+            Expression::Scalar(ref mut scalar) => {
+                scalars.push(scalar)
+            }
+            Expression::Constant(_) => {}
             Expression::Add(ref mut lhs, ref mut rhs) |
             Expression::Sub(ref mut lhs, ref mut rhs) |
-            Expression::Mulu(ref mut lhs, ref mut rhs) |
+            Expression::Mul(ref mut lhs, ref mut rhs) |
             Expression::Divu(ref mut lhs, ref mut rhs) |
             Expression::Modu(ref mut lhs, ref mut rhs) |
-            Expression::Muls(ref mut lhs, ref mut rhs) |
             Expression::Divs(ref mut lhs, ref mut rhs) |
             Expression::Mods(ref mut lhs, ref mut rhs) |
             Expression::And(ref mut lhs, ref mut rhs) |
@@ -138,29 +157,29 @@ impl Expression {
             Expression::Cmpneq(ref mut lhs, ref mut rhs) |
             Expression::Cmplts(ref mut lhs, ref mut rhs) |
             Expression::Cmpltu(ref mut lhs, ref mut rhs) => {
-                variables.append(&mut lhs.collect_variables_mut());
-                variables.append(&mut rhs.collect_variables_mut());
+                scalars.append(&mut lhs.collect_scalars_mut());
+                scalars.append(&mut rhs.collect_scalars_mut());
             },
-            Expression::Zext(bits, ref mut rhs) |
-            Expression::Sext(bits, ref mut rhs) |
-            Expression::Trun(bits, ref mut rhs) => {
-                variables.append(&mut rhs.collect_variables_mut());
+            Expression::Zext(_, ref mut rhs) |
+            Expression::Sext(_, ref mut rhs) |
+            Expression::Trun(_, ref mut rhs) => {
+                scalars.append(&mut rhs.collect_scalars_mut());
             }
         }
-        variables
+        scalars
     }
 
-    /// Create a new expression from a variable.
-    pub fn variable(variable: Variable) -> Expression {
-        Expression::Variable(variable)
+    /// Create a new `Expression` from a `Scalar`.
+    pub fn scalar(scalar: Scalar) -> Expression {
+        Expression::Scalar(scalar)
     }
 
-    /// Create a new expression from a constant.
+    /// Create a new `Expression` from a `Constant`.
     pub fn constant(constant: Constant) -> Expression {
         Expression::Constant(constant)
     }
 
-    /// Create an addition expression.
+    /// Create an addition `Expression`.
     /// # Error
     /// The sort of the lhs and the rhs are not the same
     pub fn add(lhs: Expression, rhs: Expression) -> Result<Expression> {
@@ -168,7 +187,7 @@ impl Expression {
         Ok(Expression::Add(Box::new(lhs), Box::new(rhs)))
     }
 
-    /// Create a subtraction expression.
+    /// Create a subtraction `Expression`.
     /// # Error
     /// The sort of the lhs and the rhs are not the same.
     pub fn sub(lhs: Expression, rhs: Expression) -> Result<Expression> {
@@ -176,15 +195,15 @@ impl Expression {
         Ok(Expression::Sub(Box::new(lhs), Box::new(rhs)))
     }
 
-    /// Create an unsigned multiplication expression.
+    /// Create an unsigned multiplication `Expression`.
     /// # Error
     /// The sort of the lhs and the rhs are not the same.
-    pub fn mulu(lhs: Expression, rhs: Expression) -> Result<Expression> {
+    pub fn mul(lhs: Expression, rhs: Expression) -> Result<Expression> {
         try!(Expression::ensure_sort(&lhs, &rhs, true));
-        Ok(Expression::Mulu(Box::new(lhs), Box::new(rhs)))
+        Ok(Expression::Mul(Box::new(lhs), Box::new(rhs)))
     }
 
-    /// Create an unsigned division expression.
+    /// Create an unsigned division `Expression`.
     /// # Error
     /// The sort of the lhs and the rhs are not the same.
     pub fn divu(lhs: Expression, rhs: Expression) -> Result<Expression> {
@@ -192,7 +211,7 @@ impl Expression {
         Ok(Expression::Divu(Box::new(lhs), Box::new(rhs)))
     }
 
-    /// Create an unsigned modulus expression.
+    /// Create an unsigned modulus `Expression`.
     /// # Error
     /// The sort of the lhs and the rhs are not the same.
     pub fn modu(lhs: Expression, rhs: Expression) -> Result<Expression> {
@@ -200,15 +219,7 @@ impl Expression {
         Ok(Expression::Modu(Box::new(lhs), Box::new(rhs)))
     }
 
-    /// Create a signed multiplication expression.
-    /// # Error
-    /// The sort of the lhs and the rhs are not the same.
-    pub fn muls(lhs: Expression, rhs: Expression) -> Result<Expression> {
-        try!(Expression::ensure_sort(&lhs, &rhs, true));
-        Ok(Expression::Muls(Box::new(lhs), Box::new(rhs)))
-    }
-
-    /// Create a signed division expression.
+    /// Create a signed division `Expression`.
     /// # Error
     /// The sort of the lhs and the rhs are not the same.
     pub fn divs(lhs: Expression, rhs: Expression) -> Result<Expression> {
@@ -216,7 +227,7 @@ impl Expression {
         Ok(Expression::Divs(Box::new(lhs), Box::new(rhs)))
     }
 
-    /// Create a signed modulus expression.
+    /// Create a signed modulus `Expression`.
     /// # Error
     /// The sort of the lhs and the rhs are not the same.
     pub fn mods(lhs: Expression, rhs: Expression) -> Result<Expression> {
@@ -224,7 +235,7 @@ impl Expression {
         Ok(Expression::Mods(Box::new(lhs), Box::new(rhs)))
     }
 
-    /// Create a binary and expression.
+    /// Create a binary and `Expression`.
     /// # Error
     /// The sort of the lhs and the rhs are not the same.
     pub fn and(lhs: Expression, rhs: Expression) -> Result<Expression> {
@@ -232,7 +243,7 @@ impl Expression {
         Ok(Expression::And(Box::new(lhs), Box::new(rhs)))
     }
 
-    /// Create a binary or expression.
+    /// Create a binary or `Expression`.
     /// # Error
     /// The sort of the lhs and the rhs are not the same.
     pub fn or(lhs: Expression, rhs: Expression) -> Result<Expression> {
@@ -240,7 +251,7 @@ impl Expression {
         Ok(Expression::Or(Box::new(lhs), Box::new(rhs)))
     }
 
-    /// Create a binary xor expression.
+    /// Create a binary xor `Expression`.
     /// # Error
     /// The sort of the lhs and the rhs are not the same.
     pub fn xor(lhs: Expression, rhs: Expression) -> Result<Expression> {
@@ -248,7 +259,7 @@ impl Expression {
         Ok(Expression::Xor(Box::new(lhs), Box::new(rhs)))
     }
 
-    /// Create a logical shift-left expression.
+    /// Create a logical shift-left `Expression`.
     /// # Error
     /// The sort of the lhs and the rhs are not the same.
     pub fn shl(lhs: Expression, rhs: Expression) -> Result<Expression> {
@@ -256,7 +267,7 @@ impl Expression {
         Ok(Expression::Shl(Box::new(lhs), Box::new(rhs)))
     }
 
-    /// Create a logical shift-right expression.
+    /// Create a logical shift-right `Expression`.
     /// # Error
     /// The sort of the lhs and the rhs are not the same.
     pub fn shr(lhs: Expression, rhs: Expression) -> Result<Expression> {
@@ -264,7 +275,7 @@ impl Expression {
         Ok(Expression::Shr(Box::new(lhs), Box::new(rhs)))
     }
 
-    /// Create an equals comparison expression.
+    /// Create an equals comparison `Expression`.
     /// # Error
     /// The sort of the lhs and the rhs are not the same.
     pub fn cmpeq(lhs: Expression, rhs: Expression) -> Result<Expression> {
@@ -272,7 +283,7 @@ impl Expression {
         Ok(Expression::Cmpeq(Box::new(lhs), Box::new(rhs)))
     }
 
-    /// Create an not equals comparison expression.
+    /// Create an not equals comparison `Expression`.
     /// # Error
     /// The sort of the lhs and the rhs are not the same.
     pub fn cmpneq(lhs: Expression, rhs: Expression) -> Result<Expression> {
@@ -280,7 +291,7 @@ impl Expression {
         Ok(Expression::Cmpneq(Box::new(lhs), Box::new(rhs)))
     }
 
-    /// Create an unsigned less-than comparison expression.
+    /// Create an unsigned less-than comparison `Expression`.
     /// # Error
     /// The sort of the lhs and the rhs are not the same.
     pub fn cmpltu(lhs: Expression, rhs: Expression) -> Result<Expression> {
@@ -288,7 +299,7 @@ impl Expression {
         Ok(Expression::Cmpltu(Box::new(lhs), Box::new(rhs)))
     }
 
-    /// Create a signed less-than comparison expression.
+    /// Create a signed less-than comparison `Expression`.
     /// # Error
     /// The sort of the lhs and the rhs are not the same.
     pub fn cmplts(lhs: Expression, rhs: Expression) -> Result<Expression> {
@@ -333,20 +344,18 @@ impl Expression {
 impl fmt::Display for Expression {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Expression::Variable(ref v) => v.fmt(f),
+            Expression::Scalar(ref s) => s.fmt(f),
             Expression::Constant(ref c) => c.fmt(f),
             Expression::Add(ref lhs, ref rhs) => 
                 write!(f, "({} + {})", lhs, rhs),
             Expression::Sub(ref lhs, ref rhs) =>
                 write!(f, "({} - {})", lhs, rhs),
-            Expression::Mulu(ref lhs, ref rhs) =>
-                write!(f, "({} *u {})", lhs, rhs),
+            Expression::Mul(ref lhs, ref rhs) =>
+                write!(f, "({} * {})", lhs, rhs),
             Expression::Divu(ref lhs, ref rhs) =>
                 write!(f, "({} /u {})", lhs, rhs),
             Expression::Modu(ref lhs, ref rhs) =>
                 write!(f, "({} %u {})", lhs, rhs),
-            Expression::Muls(ref lhs, ref rhs) =>
-                write!(f, "({} *s {})", lhs, rhs),
             Expression::Divs(ref lhs, ref rhs) =>
                 write!(f, "({} /s {})", lhs, rhs),
             Expression::Mods(ref lhs, ref rhs) =>
